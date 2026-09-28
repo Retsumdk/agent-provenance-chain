@@ -48,22 +48,36 @@ export class ProvenanceEngine {
 
   async getLineage(eventId: string): Promise<ProvenanceEvent[]> {
     const lineage: ProvenanceEvent[] = [];
-    const queue: string[] = [eventId];
+    const depths = new Map<string, number>();
+    const queue: Array<{ id: string; depth: number }> = [{ id: eventId, depth: 0 }];
     const visited = new Set<string>();
 
     while (queue.length > 0) {
-      const id = queue.shift()!;
+      const { id, depth } = queue.shift()!;
       if (visited.has(id)) continue;
       visited.add(id);
 
       const event = await this.storage.getEvent(id);
       if (event) {
         lineage.push(event);
-        queue.push(...event.parentEventIds);
+        depths.set(event.id, depth);
+        for (const parentId of event.parentEventIds) {
+          queue.push({ id: parentId, depth: depth + 1 });
+        }
       }
     }
 
-    return lineage.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    // Chronological order; when events share a timestamp, ancestors come
+    // before descendants (an event's parents always precede it in real time).
+    return lineage
+      .map((event) => ({ event, depth: depths.get(event.id) ?? 0 }))
+      .sort((a, b) => {
+        const ta = new Date(a.event.timestamp).getTime();
+        const tb = new Date(b.event.timestamp).getTime();
+        if (ta !== tb) return ta - tb;
+        return b.depth - a.depth;
+      })
+      .map((x) => x.event);
   }
 
   async getObjectHistory(objectId: string): Promise<ProvenanceEvent[]> {
